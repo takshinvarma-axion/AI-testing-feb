@@ -1,0 +1,12 @@
+deepeval
+datasets
+fastapi
+langchain-openai
+ollama
+openai
+pydantic
+python-dotenv
+ragas
+requests
+python-multipart
+uvicorn
