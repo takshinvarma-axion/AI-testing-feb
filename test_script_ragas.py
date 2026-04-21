@@ -5,7 +5,6 @@ Prerequisites:
 pip install ragas datasets langchain-openai requests python-dotenv
 
 Environment variables:
-- RAG_BASE_URL=https://your-rag-api.com
 - AZURE_OPENAI_API_KEY=your_key
 - AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 - AZURE_OPENAI_API_VERSION=2024-02-01
@@ -23,17 +22,16 @@ from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from ragas import evaluate
 from ragas.metrics import answer_relevancy, context_precision, context_recall, faithfulness
+from app import retrieve, ingest
 
 load_dotenv()
 
-RAG_BASE_URL = os.getenv("RAG_BASE_URL")
-if not RAG_BASE_URL:
-    raise ValueError("Set RAG_BASE_URL in .env")
+
 
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
-AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
 
 missing = [
@@ -129,12 +127,11 @@ golden_dataset: List[Dict[str, Any]] = [
 ]
 
 
+ingest(["uploads/Breaking_the_Black_Box_Module1.pdf"])
+
 def fetch_rag_answer(query: str) -> Dict[str, Any]:
     """Call your RAG API /retrieve endpoint."""
-    retrieve_url = f"{RAG_BASE_URL}/retrieve"
-    payload = {"query": query, "top_k": 3}
-    response = requests.post(retrieve_url, json=payload, timeout=90)
-    response.raise_for_status()
+    response = retrieve(query, top_k=3)
     return response.json()
 
 
@@ -203,10 +200,53 @@ results = evaluate(
 print("\nRAGAS aggregate scores:")
 print(results)
 
-try:
-    print("\nRAGAS per-test-case scores:")
-    print(results.to_pandas())
-    results_df = results.to_pandas()
-    results_df.to_csv('ragas_metrics',index=False)
-except Exception:
-    pass
+
+
+print("\nRAGAS per-test-case scores:")
+results_df = results.to_pandas()
+print(results_df)
+results_df.to_csv("ragas_metrics.csv", index=False)
+
+# --- CI assertions ---
+# Ensure retrieval/answer generation succeeded for every golden test.
+failed_cases = [item["test_case_id"] for item in golden_dataset if item["actual_output"] == "API Error"]
+assert not failed_cases, f"RAG retrieval failed for test case(s): {', '.join(failed_cases)}"
+
+empty_context_cases = [
+    item["test_case_id"] for item in golden_dataset if not item.get("retrieval_context")
+]
+assert not empty_context_cases, (
+    f"Missing retrieval context for test case(s): {', '.join(empty_context_cases)}"
+)
+
+required_metric_columns = {
+    "answer_relevancy",
+    "faithfulness",
+    "context_recall",
+    "context_precision",
+}
+missing_columns = required_metric_columns.difference(results_df.columns)
+assert not missing_columns, f"Missing expected RAGAS metric column(s): {sorted(missing_columns)}"
+
+# Default thresholds can be tuned via CI env vars without code changes.
+thresholds = {
+    "answer_relevancy": float(os.getenv("RAGAS_MIN_ANSWER_RELEVANCY", "0.70")),
+    "faithfulness": float(os.getenv("RAGAS_MIN_FAITHFULNESS", "0.70")),
+    "context_recall": float(os.getenv("RAGAS_MIN_CONTEXT_RECALL", "0.65")),
+    "context_precision": float(os.getenv("RAGAS_MIN_CONTEXT_PRECISION", "0.65")),
+}
+
+aggregate_scores = {}
+for metric_name in required_metric_columns:
+    metric_value = getattr(results, metric_name, None)
+    if metric_value is None:
+        metric_value = float(results_df[metric_name].mean())
+    aggregate_scores[metric_name] = float(metric_value)
+
+for metric_name, threshold in thresholds.items():
+    score = aggregate_scores[metric_name]
+    assert score >= threshold, (
+        f"RAGAS metric '{metric_name}' below threshold: {score:.4f} < {threshold:.4f}"
+    )
+
+print("\nRAGAS threshold assertions passed.")

@@ -101,11 +101,24 @@ load_dotenv()
 client = AzureOpenAI(
     azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
     api_key=os.environ["AZURE_OPENAI_API_KEY"],
-    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+    api_version=(
+        os.getenv("AZURE_OPENAI_API_VERSION")
+        or os.getenv("OPENAI_API_VERSION")
+        or "2024-02-01"
+    ),
 )
 
-EMBED_DEPLOYMENT = os.getenv("AZURE_EMBED_DEPLOYMENT", "text-embedding-ada-002")
-CHAT_DEPLOYMENT  = os.getenv("AZURE_CHAT_DEPLOYMENT",  "gpt-4o")
+EMBED_DEPLOYMENT = (
+    os.getenv("AZURE_EMBED_DEPLOYMENT")
+    or os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
+    or "text-embedding-ada-002"
+)
+CHAT_DEPLOYMENT = (
+    os.getenv("AZURE_CHAT_DEPLOYMENT")
+    or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    or os.getenv("AZURE_DEPLOYMENT_NAME")
+    or "gpt-4o"
+)
 TOP_K            = int(os.getenv("RAG_TOP_K", "3"))
 
 # ─────────────────────────────────────────────────────────────────────────────
